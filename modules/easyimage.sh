@@ -47,3 +47,18 @@ EOF
         return 1
     fi
 }
+# ============================================
+# 卸载函数
+# ============================================
+uninstall() {
+    print_warning "卸载 EasyImg 图床将删除所有图片和数据"
+    read -p "确认卸载？(y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        cd /opt/easyimg 2>/dev/null
+        docker compose down -v 2>/dev/null
+        rm -rf /opt/easyimg
+        print_success "EasyImg 已卸载"
+        write_log "$LOG_LEVEL_INFO" "EasyImg 已卸载"
+    fi
+}
