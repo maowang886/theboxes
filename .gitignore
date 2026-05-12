@@ -1,0 +1,13 @@
+
+```bash
+# 临时文件
+*.log
+*.bak
+*.tmp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 本地配置（如果有）
+config.local.sh
