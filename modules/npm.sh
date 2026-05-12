@@ -50,3 +50,18 @@ EOF
         return 1
     fi
 }
+# ============================================
+# 卸载函数
+# ============================================
+uninstall() {
+    print_warning "卸载 Nginx Proxy Manager 将删除所有配置数据"
+    read -p "确认卸载？(y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        cd /opt/nginx-proxy-manager 2>/dev/null
+        docker compose down -v 2>/dev/null
+        rm -rf /opt/nginx-proxy-manager
+        print_success "Nginx Proxy Manager 已卸载"
+        write_log "$LOG_LEVEL_INFO" "Nginx Proxy Manager 已卸载"
+    fi
+}
