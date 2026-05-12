@@ -213,6 +213,7 @@ main() {
         ((i++))
     done <<< "$modules_list"
     echo "  f. 配置防火墙"
+    echo "  u. 卸载已安装的应用"
     echo "  0. 退出"
     echo ""
     
@@ -225,6 +226,9 @@ main() {
             ;;
         [fF])
             run_firewall_module
+            ;;
+        [uU])
+            bash "$SCRIPT_DIR/utils/uninstall.sh"
             ;;
         *)
             if [[ -n "${module_map[$choice]}" ]]; then
