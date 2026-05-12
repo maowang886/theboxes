@@ -1,6 +1,6 @@
 #!/bin/bash
 # 端口开放模块 (iptables)
-# 功能1: 自动检测已安装服务或已知服务端口并开放
+# 功能1: 自动检测已安装服务端口并开放（含 qBittorrent 随机 BT 端口）
 # 功能2: 手动输入端口开放（可多选）
 
 install() {
@@ -35,7 +35,7 @@ install() {
 auto_open_service_ports() {
     print_step "自动检测服务端口"
 
-    # 定义已知服务及其端口（可扩展）
+    # 定义已知服务及其端口（基础端口，动态端口会在检测中添加）
     declare -A SERVICE_PORTS
     SERVICE_PORTS=(
         ["SSH"]="22"
@@ -44,7 +44,6 @@ auto_open_service_ports() {
         ["Nginx Proxy Manager"]="80 81 443"
         ["Komari 探针"]="8008"
         ["EasyImg 图床"]="3000"
-        ["qBittorrent"]="8083"
         ["Alist"]="5244"
         ["Trojan/Xray"]="4837"
     )
@@ -75,10 +74,27 @@ auto_open_service_ports() {
         all_ports+=("3000")
     fi
 
-    # 检查 qBittorrent
-    if systemctl is-active --quiet qbittorrent-nox 2>/dev/null; then
+    # 检查 qBittorrent (Docker) - 支持随机 BT 端口检测
+    if docker ps --format 'table' 2>/dev/null | grep -q "qbittorrent"; then
         installed_services+=("qBittorrent")
-        all_ports+=("8083")
+        # WebUI 固定端口 8080
+        all_ports+=("8080")
+        
+        # 获取实际映射的 BT 端口（容器内部 6881/tcp 映射到宿主机的随机端口）
+        local bt_port_tcp=$(docker port qbittorrent 6881/tcp 2>/dev/null | head -1 | cut -d: -f2)
+        local bt_port_udp=$(docker port qbittorrent 6881/udp 2>/dev/null | head -1 | cut -d: -f2)
+        
+        if [ -n "$bt_port_tcp" ]; then
+            all_ports+=("$bt_port_tcp")
+            SERVICE_PORTS["qBittorrent"]="WebUI:8080, BT TCP:${bt_port_tcp}"
+        fi
+        if [ -n "$bt_port_udp" ] && [ "$bt_port_udp" != "$bt_port_tcp" ]; then
+            all_ports+=("$bt_port_udp")
+            SERVICE_PORTS["qBittorrent"]="${SERVICE_PORTS["qBittorrent"]}, BT UDP:${bt_port_udp}"
+        fi
+        if [ -z "$bt_port_tcp" ] && [ -z "$bt_port_udp" ]; then
+            SERVICE_PORTS["qBittorrent"]="8080"
+        fi
     fi
 
     # 检查 Alist
@@ -108,11 +124,15 @@ auto_open_service_ports() {
     echo ""
     print_info "检测到以下已安装的服务："
     for svc in "${installed_services[@]}"; do
-        echo "  - ${svc} (端口: ${SERVICE_PORTS[$svc]})"
+        if [ -n "${SERVICE_PORTS[$svc]}" ]; then
+            echo "  - ${svc} (端口: ${SERVICE_PORTS[$svc]})"
+        else
+            echo "  - ${svc}"
+        fi
     done
 
     # 去重端口列表
-    local unique_ports=($(echo "${all_ports[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+    local unique_ports=($(echo "${all_ports[@]}" | tr ' ' '\n' | sort -nu | tr '\n' ' '))
     echo ""
     print_info "即将开放的端口: ${unique_ports[@]}"
 
@@ -197,7 +217,12 @@ open_ports() {
     # 开放新端口
     for port in "${new_ports[@]}"; do
         iptables -I INPUT -p tcp --dport "$port" -j ACCEPT
-        print_success "已开放端口 ${port}"
+        print_success "已开放端口 ${port} (TCP)"
+        # 对常用端口也开放 UDP（可选，针对 BT 端口）
+        if [[ "$port" =~ ^(6881|[1-9][0-9]{4,5})$ ]] || [ "$port" -ge 10000 ]; then
+            iptables -I INPUT -p udp --dport "$port" -j ACCEPT
+            print_success "已开放端口 ${port} (UDP)"
+        fi
     done
 
     # 安装持久化工具（如果需要）
