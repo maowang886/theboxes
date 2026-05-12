@@ -19,6 +19,6 @@
 ### 快速开始
 
 ```bash
-git clone https://github.com/maowang886/selective-install.git
+git clone https://github.com/maowang886/theboxes.git
 cd selective-install
 sudo bash selective_install.sh
