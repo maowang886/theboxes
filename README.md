@@ -20,5 +20,5 @@
 
 ```bash
 git clone https://github.com/maowang886/theboxes.git
-cd selective-install
+cd theboxes
 sudo bash selective_install.sh
