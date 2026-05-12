@@ -31,3 +31,21 @@ install() {
         return 1
     fi
 }
+# ============================================
+# 卸载函数
+# ============================================
+uninstall() {
+    print_warning "卸载 Alist 将删除所有配置和数据"
+    read -p "确认卸载？(y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        systemctl stop alist 2>/dev/null
+        systemctl disable alist 2>/dev/null
+        rm -f /etc/systemd/system/alist.service
+        rm -rf /opt/alist
+        curl -fsSL "https://alist.nn.ci/v3.sh" | bash -s uninstall 2>/dev/null
+        systemctl daemon-reload
+        print_success "Alist 已卸载"
+        write_log "$LOG_LEVEL_INFO" "Alist 已卸载"
+    fi
+}
