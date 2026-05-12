@@ -301,3 +301,23 @@ uninstall() {
         print_success "acme.sh 中的证书记录已清理"
     fi
 }
+# ============================================
+# 卸载函数
+# ============================================
+uninstall() {
+    print_warning "卸载 SSL 证书将删除所有证书文件"
+    read -p "确认删除所有证书？(y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        rm -rf /etc/ssl/*/
+        print_success "所有证书已删除"
+        
+        # 清理 acme.sh 中的域名记录
+        /root/.acme.sh/acme.sh --list 2>/dev/null | tail -n +2 | awk '{print $1}' | while read domain; do
+            /root/.acme.sh/acme.sh --remove -d "$domain" 2>/dev/null
+        done
+        
+        print_success "acme.sh 证书记录已清理"
+        write_log "$LOG_LEVEL_INFO" "SSL 证书已卸载"
+    fi
+}
