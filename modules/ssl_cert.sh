@@ -3,8 +3,8 @@
 # SSL 证书申请模块
 # 支持方式:
 #   1. DNS API (Cloudflare) - 支持泛域名
-#   2. HTTP 验证 (Nginx) - 简单域名验证
-# 版本: v1.0
+#   2. HTTP 验证 (复用 Nginx Proxy Manager 容器)
+# 版本: v1.1
 # ============================================
 
 MODULE_NAME="SSL证书申请"
@@ -22,7 +22,7 @@ install() {
     echo ""
     echo "请选择验证方式："
     echo "  1. DNS API 验证 (Cloudflare) - 支持泛域名证书，推荐"
-    echo "  2. HTTP 验证 (Nginx) - 需要有 80 端口，仅单域名"
+    echo "  2. HTTP 验证 (复用 Nginx Proxy Manager) - 需要 NPM 容器运行"
     echo ""
     read -p "请选择 (1/2): " verify_method
 
@@ -31,7 +31,7 @@ install() {
             dns_api_apply
             ;;
         2)
-            http_verify_apply
+            http_verify_with_npm
             ;;
         *)
             print_error "无效选择"
@@ -73,7 +73,6 @@ dns_api_apply() {
     echo ""
     print_info "请输入 Cloudflare API 密钥（输入时不会显示）"
 
-    # 隐藏输入 API Token
     read -s -p "CF_Token: " cf_token
     echo ""
     read -s -p "再次输入确认: " cf_token2
@@ -89,63 +88,54 @@ dns_api_apply() {
         return 1
     fi
 
-    # 可选：输入 Account ID 和 Zone ID（非必填，但某些情况需要）
     echo ""
     read -p "CF_Account_ID（可选，按回车跳过）: " cf_account_id
     read -p "CF_Zone_ID（可选，按回车跳过）: " cf_zone_id
 
-    # ========== 设置 API 密钥（仅在当前会话生效）==========
+    # 设置 API 密钥（临时环境变量）
     export CF_Token="$cf_token"
     [ -n "$cf_account_id" ] && export CF_Account_ID="$cf_account_id"
     [ -n "$cf_zone_id" ] && export CF_Zone_ID="$cf_zone_id"
 
-    # ========== 申请证书 ==========
+    # 申请证书
     print_info "正在申请证书..."
-
-    # 记录开始时间
     local start_time=$(date +%s)
 
-    # 构建申请命令
     if [ "$is_wildcard" = true ]; then
-        print_info "申请泛域名证书: $domain_input 和 *.$main_domain"
         /root/.acme.sh/acme.sh --issue -d "$main_domain" -d "*.$main_domain" --dns dns_cf -k ec-256
     else
-        print_info "申请单域名证书: $domain_input"
         /root/.acme.sh/acme.sh --issue -d "$domain_input" --dns dns_cf -k ec-256
     fi
 
     if [ $? -ne 0 ]; then
         print_error "证书申请失败"
+        unset CF_Token CF_Account_ID CF_Zone_ID
         return 1
     fi
 
-    # ========== 安装证书 ==========
+    # 安装证书
     local cert_dir="/etc/ssl/$main_domain"
     mkdir -p "$cert_dir"
-
-    print_info "安装证书到 $cert_dir"
 
     if [ "$is_wildcard" = true ]; then
         /root/.acme.sh/acme.sh --installcert -d "$main_domain" -d "*.$main_domain" \
             --fullchain-file "$cert_dir/fullchain.crt" \
-            --key-file "$cert_dir/private.key" \
-            --ecc
+            --key-file "$cert_dir/private.key" --ecc
     else
         /root/.acme.sh/acme.sh --installcert -d "$domain_input" \
             --fullchain-file "$cert_dir/fullchain.crt" \
-            --key-file "$cert_dir/private.key" \
-            --ecc
+            --key-file "$cert_dir/private.key" --ecc
     fi
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
 
-    # ========== 记录凭证 ==========
+    # 记录凭证
     local server_ip=$(get_server_ip)
     record_credential "SSL 证书 ($main_domain)" "" "" \
         "证书路径: $cert_dir\n  证书文件: fullchain.crt\n  私钥文件: private.key\n  申请耗时: ${duration}秒"
 
-    # ========== 清理 API 密钥（取消环境变量）==========
+    # 清理 API 密钥
     unset CF_Token CF_Account_ID CF_Zone_ID
 
     print_success "证书申请完成！"
@@ -154,27 +144,40 @@ dns_api_apply() {
     echo "  公钥: $cert_dir/fullchain.crt"
     echo "  私钥: $cert_dir/private.key"
     echo ""
-    print_warning "API 密钥已从当前会话中清除，不会被保存"
+    print_warning "API 密钥已从当前会话中清除"
 }
 
 # ============================================
-# 方式二：HTTP 验证（Nginx）
+# 方式二：HTTP 验证（使用 Nginx Proxy Manager 容器）
 # ============================================
-http_verify_apply() {
-    print_step "HTTP 验证 (Nginx)"
+http_verify_with_npm() {
+    print_step "HTTP 验证 (使用 Nginx Proxy Manager)"
 
-    # 检查 Nginx 是否安装
-    if ! command -v nginx &> /dev/null; then
-        print_error "Nginx 未安装，请先安装 Nginx"
-        echo "你可以先安装 npm 模块（Nginx Proxy Manager）或手动安装 Nginx"
+    # 检查 Docker 和 NPM 容器
+    if ! command -v docker &> /dev/null; then
+        print_error "Docker 未安装"
         return 1
     fi
 
-    # 检查 80 端口是否开放
-    if ! netstat -tlnp 2>/dev/null | grep -q ":80 "; then
-        print_error "80 端口未监听，请确保 Nginx 已启动"
+    if ! docker ps --format 'table' 2>/dev/null | grep -q "nginx-proxy-manager"; then
+        print_error "Nginx Proxy Manager 容器未运行"
+        echo "请先通过百宝箱安装 npm 模块"
         return 1
     fi
+
+    # 获取 NPM 容器的 webroot 路径
+    NPM_DATA_DIR="/opt/nginx-proxy-manager/data"
+    if [ ! -d "$NPM_DATA_DIR" ]; then
+        print_error "找不到 NPM 数据目录: $NPM_DATA_DIR"
+        return 1
+    fi
+
+    # 创建临时验证目录（acme.sh 需要 .well-known 可写）
+    VERIFY_DIR="$NPM_DATA_DIR/letsencrypt"
+    mkdir -p "$VERIFY_DIR"
+    
+    # 确保目录权限正确
+    chmod 755 "$VERIFY_DIR"
 
     echo ""
     read -p "请输入要申请证书的域名: " domain
@@ -199,16 +202,32 @@ http_verify_apply() {
         fi
     fi
 
+    # 测试 80 端口是否可访问
+    print_info "测试 80 端口连通性..."
+    if ! curl -s -o /dev/null --max-time 5 "http://$domain/.well-known/acme-challenge/test"; then
+        print_warning "无法访问 http://$domain/.well-known/"
+        print_info "请确保域名已解析到本服务器，且 NPM 容器正在监听 80 端口"
+        read -p "是否继续？(y/n): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            return 1
+        fi
+    fi
+
     # ========== 申请证书 ==========
-    print_info "正在申请证书（需要 80 端口可访问）..."
+    print_info "正在通过 HTTP 验证申请证书..."
+    print_info "验证目录: $VERIFY_DIR"
     
     local start_time=$(date +%s)
 
-    /root/.acme.sh/acme.sh --issue -d "$domain" --webroot /var/www/html -k ec-256
+    /root/.acme.sh/acme.sh --issue -d "$domain" --webroot "$VERIFY_DIR" -k ec-256
 
     if [ $? -ne 0 ]; then
         print_error "证书申请失败"
-        print_info "请确保域名已解析到本服务器，且 80 端口可公网访问"
+        print_info "请检查:"
+        echo "  1. 域名是否正确解析到本服务器 IP"
+        echo "  2. NPM 容器是否正常运行"
+        echo "  3. 80 端口是否可以从外网访问"
         return 1
     fi
 
@@ -218,13 +237,12 @@ http_verify_apply() {
 
     /root/.acme.sh/acme.sh --installcert -d "$domain" \
         --fullchain-file "$cert_dir/fullchain.crt" \
-        --key-file "$cert_dir/private.key" \
-        --ecc
+        --key-file "$cert_dir/private.key" --ecc
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
 
-    # ========== 记录凭证 ==========
+    # ========== 提示导入到 NPM ==========
     record_credential "SSL 证书 ($domain)" "" "" \
         "证书路径: $cert_dir\n  证书文件: fullchain.crt\n  私钥文件: private.key\n  申请耗时: ${duration}秒"
 
@@ -233,6 +251,11 @@ http_verify_apply() {
     print_info "证书位置: $cert_dir"
     echo "  公钥: $cert_dir/fullchain.crt"
     echo "  私钥: $cert_dir/private.key"
+    echo ""
+    print_info "下一步：将证书导入 Nginx Proxy Manager"
+    echo "  1. 登录 NPM WebUI (http://$(get_server_ip):81)"
+    echo "  2. 进入 SSL Certificates → Add SSL Certificate"
+    echo "  3. 选择 Custom，上传上面的证书文件"
 }
 
 # ============================================
@@ -271,7 +294,6 @@ uninstall() {
         rm -rf /etc/ssl/*/
         print_success "所有证书已删除"
         
-        # 清理 acme.sh 中的域名记录
         /root/.acme.sh/acme.sh --list 2>/dev/null | tail -n +2 | awk '{print $1}' | while read domain; do
             /root/.acme.sh/acme.sh --remove -d "$domain" 2>/dev/null
         done
