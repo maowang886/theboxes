@@ -47,3 +47,20 @@ EOF
         return 1
     fi
 }
+# ============================================
+# 卸载函数
+# ============================================
+uninstall() {
+    print_warning "卸载 Komari 探针"
+    read -p "确认卸载？(y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        systemctl stop komari 2>/dev/null
+        systemctl disable komari 2>/dev/null
+        rm -f /etc/systemd/system/komari.service
+        rm -f /usr/local/bin/komari
+        systemctl daemon-reload
+        print_success "Komari 已卸载"
+        write_log "$LOG_LEVEL_INFO" "Komari 已卸载"
+    fi
+}
