@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
-# 公共函数库 - 颜色、日志、健康检查、凭证记录
-# 版本: v2.0 (优化版)
+# 公共函数库 - 修复版
+# 版本: v2.1 (稳定版)
 # ============================================
 
 # ---------- 颜色定义 ----------
@@ -15,7 +15,7 @@ export NC='\033[0m'
 # ---------- 日志配置 ----------
 LOG_DIR="/var/log/theboxes"
 LOG_FILE="$LOG_DIR/install.log"
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" 2>/dev/null
 
 LOG_LEVEL_INFO="INFO"
 LOG_LEVEL_SUCCESS="SUCCESS"
@@ -26,7 +26,7 @@ write_log() {
     local level="$1"
     local message="$2"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE" 2>/dev/null
 }
 
 # ---------- 打印函数 ----------
@@ -76,7 +76,6 @@ record_credential() {
     [ -n "$password" ] && echo "  密码: $password" >> "$CREDENTIALS_FILE"
     [ -n "$extra" ] && echo "  说明: $extra" >> "$CREDENTIALS_FILE"
     echo "" >> "$CREDENTIALS_FILE"
-    write_log "$LOG_LEVEL_INFO" "已记录凭证: $service"
 }
 
 # ---------- 通用工具 ----------
@@ -91,63 +90,82 @@ check_command() {
     command -v "$1" &> /dev/null
 }
 
-# ========== 新增：清理 apt 锁和进程 ==========
+# ========== 修复后的 apt 函数（所有错误都被捕获）==========
+
+# 清理 apt 环境（不会导致脚本退出）
 apt_clean() {
-    # 清理锁文件
-    rm -f /var/lib/dpkg/lock-frontend 2>/dev/null
-    rm -f /var/lib/dpkg/lock 2>/dev/null
-    rm -f /var/cache/apt/archives/lock 2>/dev/null
+    print_info "清理 apt 环境..."
     
-    # 修复 dpkg
-    dpkg --configure -a 2>/dev/null
-    
-    # 杀掉残留进程
-    pkill -9 apt 2>/dev/null
-    pkill -9 dpkg 2>/dev/null
+    # 所有命令都加上 || true，避免 set -e 导致退出
+    rm -f /var/lib/dpkg/lock-frontend 2>/dev/null || true
+    rm -f /var/lib/dpkg/lock 2>/dev/null || true
+    rm -f /var/cache/apt/archives/lock 2>/dev/null || true
+    dpkg --configure -a 2>/dev/null || true
+    pkill -9 apt 2>/dev/null || true
+    pkill -9 dpkg 2>/dev/null || true
     
     sleep 1
+    print_success "apt 环境清理完成"
+    return 0
 }
 
-# ========== 新增：带超时的 apt 更新 ==========
+# 更新软件包列表
 apt_update() {
     print_info "更新软件包列表..."
     write_log "$LOG_LEVEL_INFO" "apt update"
     
-    # 超时 60 秒
-    timeout 60 apt update -y 2>&1 | tee -a "$LOG_FILE"
-    local exit_code=${PIPESTATUS[0]}
+    # 禁用 set -e 的影响
+    set +e
+    apt update -y 2>&1 | tee -a "$LOG_FILE"
+    local exit_code=$?
+    set -e
     
     if [ $exit_code -eq 0 ]; then
         print_success "软件包列表更新成功"
         return 0
-    elif [ $exit_code -eq 124 ]; then
-        print_error "apt update 超时 (60秒)"
-        return 1
     else
         print_warning "apt update 返回码: $exit_code"
         return 1
     fi
 }
 
-# ========== 新增：带超时的 apt 安装 ==========
+# 安装软件包
 apt_install() {
     local packages="$1"
     
     print_info "正在安装: $packages"
     write_log "$LOG_LEVEL_INFO" "apt install: $packages"
     
-    # 超时 120 秒，禁用交互
-    DEBIAN_FRONTEND=noninteractive timeout 120 apt install -y -qq $packages 2>&1 | tee -a "$LOG_FILE"
-    local exit_code=${PIPESTATUS[0]}
+    set +e
+    DEBIAN_FRONTEND=noninteractive apt install -y $packages 2>&1 | tee -a "$LOG_FILE"
+    local exit_code=$?
+    set -e
     
     if [ $exit_code -eq 0 ]; then
         print_success "安装完成: $packages"
         return 0
-    elif [ $exit_code -eq 124 ]; then
-        print_error "apt install 超时 (120秒): $packages"
-        return 1
     else
         print_error "安装失败: $packages"
         return 1
+    fi
+}
+
+# 检查并安装基础工具
+ensure_base_tools() {
+    local missing_tools=""
+    
+    for tool in curl wget git socat; do
+        if ! check_command $tool; then
+            missing_tools="$missing_tools $tool"
+        fi
+    done
+    
+    if [ -n "$missing_tools" ]; then
+        print_info "缺少以下工具: $missing_tools"
+        apt_clean
+        apt_update || true
+        apt_install "$missing_tools"
+    else
+        print_success "所有基础工具已安装"
     fi
 }
