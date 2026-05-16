@@ -294,8 +294,8 @@ manage_warp() {
     echo "  4. 切换账户类型 (免费/WARP+/Teams)"
     echo "  5. 刷 WARP+ 流量"
     echo "  6. 提取配置文件"
-    echo "  7. 卸载 WARP"
-    echo "  8. EndPoint 优选 (提升奈飞解锁效果)"
+    echo "  7. EndPoint 优选 (提升奈飞解锁效果)"
+    echo "  8. 卸载 WARP"
     echo "  0. 返回"
     read -p "请选择: " manage_choice
 
@@ -306,7 +306,8 @@ manage_warp() {
         4) switch_account "$warp_type" ;;
         5) add_warp_plus_traffic "$warp_type" ;;
         6) extract_config "$warp_type" ;;
-        7) uninstall ;;
+        7) optimize_endpoint ;;
+        8) uninstall ;;
         0) return 0 ;;
         *) print_error "无效选择" ;;
     esac
@@ -454,6 +455,52 @@ check_wgcf_status() {
         return 0
     fi
     return 1
+}
+# ============================================
+# EndPoint IP 优选（刷奈飞 IP）
+# ============================================
+optimize_endpoint() {
+    print_step "WARP EndPoint IP 优选"
+
+    print_info "此功能将测试 CloudFlare Endpoint IP，找到最优接入点"
+    print_info "可有效提升奈飞流媒体解锁效果和连接速度"
+    echo ""
+
+    # 检查 wget 是否安装
+    if ! command -v wget &> /dev/null; then
+        print_info "安装 wget..."
+        apt install -y wget
+    fi
+
+    # 下载并运行 EndPoint 优选脚本
+    print_info "下载 EndPoint 优选脚本..."
+
+    local yxip_url="https://gitlab.com/Misaka-blog/warp-script/-/raw/main/files/warp-yxip/warp-yxip.sh"
+    
+    # 下载脚本到临时目录
+    cd /tmp
+    wget -N "$yxip_url" -O warp-yxip.sh
+    chmod +x warp-yxip.sh
+    
+    print_info "开始测试 Endpoint IP..."
+    echo ""
+
+    # 执行优选脚本
+    bash warp-yxip.sh
+    
+    print_success "Endpoint 优选完成"
+    
+    # 提示用户如何应用
+    echo ""
+    print_info "优选完成后，请按以下步骤应用最优 IP："
+    echo "  1. 查看测试结果，找到最快的 Endpoint IP"
+    echo "  2. 停止 WARP: wg-quick down wgcf"
+    echo "  3. 编辑配置文件: nano /etc/wireguard/wgcf.conf"
+    echo "  4. 修改 Endpoint 行: Endpoint = [最优IP]:2408"
+    echo "  5. 重启 WARP: wg-quick up wgcf"
+    echo ""
+    print_info "测试完成后可按任意键返回..."
+    read -n 1 -s -r
 }
 
 # ============================================
