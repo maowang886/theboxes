@@ -295,6 +295,7 @@ manage_warp() {
     echo "  5. 刷 WARP+ 流量"
     echo "  6. 提取配置文件"
     echo "  7. 卸载 WARP"
+    echo "  8. EndPoint 优选 (提升奈飞解锁效果)"
     echo "  0. 返回"
     read -p "请选择: " manage_choice
 
