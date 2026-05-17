@@ -1,8 +1,7 @@
-
 #!/bin/bash
 # ============================================
 # Alist 模块 - 网盘聚合工具
-# 修复：非交互式安装，自动绕过官方脚本菜单
+# 修复：使用官方脚本的静默安装参数
 # ============================================
 
 MODULE_NAME="Alist"
@@ -11,22 +10,20 @@ MODULE_DESC="网盘聚合工具"
 install() {
     print_step "安装 Alist"
 
-    # 检查端口是否被占用
     if check_port_in_use 5244; then
-        print_error "端口 5244 已被占用，无法安装 Alist"
+        print_error "端口 5244 已被占用"
         return 1
     fi
 
-    print_info "正在静默安装 Alist（自动选择安装选项）..."
+    print_info "正在静默安装 Alist（使用官方脚本的 install 参数）..."
 
-    # 关键修复：用 echo "1" 模拟用户输入，选择安装选项
-    # 同时捕获输出，避免交互卡住
-    echo "1" | curl -fsSL https://alist.nn.ci/v3.sh | bash
+    # 关键修复：使用 -s install 参数，跳过交互菜单
+    curl -fsSL https://alist.nn.ci/v3.sh | bash -s install --no-interactive
 
     # 等待服务文件生成
     sleep 3
 
-    # 如果服务文件存在，则启动并启用
+    # 启动并启用服务
     if [ -f /etc/systemd/system/alist.service ]; then
         systemctl daemon-reload
         systemctl enable alist
@@ -40,31 +37,20 @@ install() {
         return 1
     fi
 
-    # 等待服务完全启动
     sleep 3
 
-    # 健康检查
     if systemctl is-active --quiet alist; then
         local server_ip=$(get_server_ip)
-        # 获取 admin 密码
         local admin_password=$(/opt/alist/alist admin 2>/dev/null | grep -oE '[a-zA-Z0-9]{8,}' | head -1)
-        if [ -z "$admin_password" ]; then
-            admin_password=$(/opt/alist/alist admin 2>/dev/null | grep -i "password" | awk '{print $NF}')
-        fi
-        if [ -z "$admin_password" ]; then
-            admin_password="请手动运行 /opt/alist/alist admin 查看"
-        fi
-
+        [ -z "$admin_password" ] && admin_password="请手动运行 /opt/alist/alist admin 查看"
+        
         print_success "Alist 安装完成"
         record_credential "Alist" "admin" "$admin_password" "http://${server_ip}:5244"
-
         echo ""
         print_info "连接信息："
         echo "  地址: http://${server_ip}:5244"
         echo "  用户名: admin"
         echo "  密码: $admin_password"
-        echo ""
-        print_warning "首次登录请立即修改密码"
     else
         print_error "Alist 启动失败"
         journalctl -u alist -n 20 --no-pager
