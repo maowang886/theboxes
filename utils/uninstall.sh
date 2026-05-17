@@ -1,15 +1,16 @@
 #!/bin/bash
 # ============================================
 # 百宝箱统一卸载工具
-# 功能：选择已安装的模块进行卸载
 # 使用方法: sudo bash utils/uninstall.sh
 # ============================================
 
-set -e
-
+# 获取脚本所在目录的上级目录（theboxes根目录）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 加载公共函数库（修复：添加 source）
 source "$SCRIPT_DIR/lib/common.sh"
 
+# 检查 root 权限（现在 check_root 函数已可用）
 check_root
 
 print_step "百宝箱卸载工具"
@@ -18,8 +19,8 @@ print_step "百宝箱卸载工具"
 declare -A INSTALLED_MODULES
 INSTALLED_LIST=()
 
-# 检测 Komari
-if [ -f "/usr/local/bin/komari" ] || systemctl is-active --quiet komari 2>/dev/null; then
+# 检测 Komari (Docker)
+if docker ps --format 'table' 2>/dev/null | grep -q "komari"; then
     INSTALLED_MODULES["komari"]="Komari 探针"
     INSTALLED_LIST+=("komari")
 fi
@@ -42,16 +43,40 @@ if docker ps --format 'table' 2>/dev/null | grep -q "qbittorrent"; then
     INSTALLED_LIST+=("qbittorrent")
 fi
 
-# 检测 Alist
-if systemctl is-active --quiet alist 2>/dev/null; then
+# 检测 Alist (Docker)
+if docker ps --format 'table' 2>/dev/null | grep -q "alist"; then
     INSTALLED_MODULES["alist"]="Alist"
     INSTALLED_LIST+=("alist")
 fi
 
-# 检测 SSL 证书
-if [ -d "/etc/ssl" ] && [ "$(ls -A /etc/ssl/*/fullchain.crt 2>/dev/null)" ]; then
+# 检测 Alist (原生，兼容旧版)
+if [ -f /opt/alist/alist ] && ! docker ps | grep -q alist; then
+    INSTALLED_MODULES["alist"]="Alist (原生)"
+    INSTALLED_LIST+=("alist")
+fi
+
+# 检测 SSL 证书（检查是否有证书文件）
+if ls /etc/ssl/*/fullchain.crt 2>/dev/null | head -1 | grep -q .; then
     INSTALLED_MODULES["ssl_cert"]="SSL 证书"
     INSTALLED_LIST+=("ssl_cert")
+fi
+
+# 检测 BBR
+if lsmod | grep -q bbr; then
+    INSTALLED_MODULES["bbr"]="BBR 加速"
+    INSTALLED_LIST+=("bbr")
+fi
+
+# 检测 WARP (WireGuard 或 warp-go)
+if [ -f /etc/wireguard/wgcf.conf ] || systemctl is-active --quiet warp-go 2>/dev/null; then
+    INSTALLED_MODULES["warp"]="WARP"
+    INSTALLED_LIST+=("warp")
+fi
+
+# 检测 Swap 文件
+if swapon --show 2>/dev/null | grep -q "/swapfile"; then
+    INSTALLED_MODULES["swap"]="Swap 虚拟内存"
+    INSTALLED_LIST+=("swap")
 fi
 
 if [ ${#INSTALLED_LIST[@]} -eq 0 ]; then
@@ -87,7 +112,11 @@ if [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
                 source "$module_file"
                 if declare -f uninstall > /dev/null; then
                     uninstall
+                else
+                    print_warning "模块 $module 没有卸载函数，跳过"
                 fi
+            else
+                print_warning "模块文件不存在: $module_file"
             fi
         done
         print_success "所有服务已卸载"
@@ -105,7 +134,9 @@ if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#INST
         if declare -f uninstall > /dev/null; then
             uninstall
             # 从凭证文件中移除相关记录
-            sed -i "/【${INSTALLED_MODULES[$module_name]}】/,/^$/d" "$CREDENTIALS_FILE" 2>/dev/null
+            service_name="${INSTALLED_MODULES[$module_name]}"
+            sed -i "/【${service_name}】/,/^$/d" "$CREDENTIALS_FILE" 2>/dev/null
+            print_success "已从凭证文件中移除 $service_name 的记录"
         else
             print_error "模块 $module_name 没有卸载函数"
         fi
