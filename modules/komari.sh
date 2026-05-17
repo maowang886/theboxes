@@ -1,66 +1,91 @@
 #!/bin/bash
-# Komari 探针模块
-# 版本: v2.0
+# Komari 探针模块 - Docker Compose 部署版本
+
+MODULE_NAME="Komari"
+MODULE_DESC="服务器监控探针 (Docker Compose)"
+
+# 检查端口是否被占用的函数 (需依赖主脚本的 common.sh)
+# check_port_in_use 由 lib/common.sh 提供
 
 install() {
-    print_info "安装 Komari 探针 (原生二进制)"
+    print_step "安装 Komari 探针 (Docker Compose)"
 
-    # 检查端口冲突
-    if check_port_in_use 8008; then
-        print_error "端口 8008 已被占用"
+    # 1. 检查端口占用
+    if check_port_in_use 25774; then
+        print_error "端口 25774 已被占用，无法安装 Komari"
         return 1
     fi
 
-    curl -L https://github.com/1Panel-dev/komari/releases/latest/download/komari-linux-amd64 -o /usr/local/bin/komari
-    chmod +x /usr/local/bin/komari
-    
-    cat > /etc/systemd/system/komari.service << EOF
-[Unit]
-Description=Komari Monitor
-After=network.target
+    # 2. 创建目录和 docker-compose.yml
+    local KOMARI_DIR="/opt/komari"
+    mkdir -p "$KOMARI_DIR"
+    cd "$KOMARI_DIR" || return 1
 
-[Service]
-ExecStart=/usr/local/bin/komari server
-Restart=always
-User=root
+    print_info "创建 docker-compose.yml 配置文件..."
+    cat > docker-compose.yml << 'EOF'
+version: '3.8'
 
-[Install]
-WantedBy=multi-user.target
+services:
+  komari:
+    image: ghcr.io/komari-monitor/komari:latest
+    container_name: komari
+    restart: unless-stopped
+    ports:
+      - "25774:25774"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
 EOF
 
-    systemctl daemon-reload
-    systemctl enable komari
-    systemctl start komari
+    # 3. 拉取镜像并启动容器
+    print_info "正在拉取镜像并启动 Komari..."
+    docker compose up -d
 
-    if health_check_systemd "komari"; then
-        health_check_tcp "localhost" 8008 10 2
-        
-        local server_ip=$(get_server_ip)
-        record_credential "Komari 探针" "" "" \
-            "访问地址: http://${server_ip}:8008 (无默认密码)"
-        
-        print_success "Komari 安装完成"
-        return 0
-    else
-        print_error "Komari 启动失败"
-        journalctl -u komari -n 20 --no-pager
+    # 4. 等待容器启动并检查状态
+    print_info "等待服务启动..."
+    sleep 10
+
+    if ! docker ps | grep -q komari; then
+        print_error "Komari 容器启动失败"
+        docker compose logs --tail 30
         return 1
     fi
+
+    # 5. 从日志中获取初始密码
+    local admin_password=$(docker logs komari 2>&1 | grep -oP '(?<=password: ).*')
+
+    if [ -z "$admin_password" ]; then
+        admin_password="请使用 'docker logs komari' 查看初始密码"
+        print_warning "未能自动获取密码"
+    fi
+
+    # 6. 记录凭证并输出信息
+    local server_ip=$(get_server_ip)
+    record_credential "Komari" "admin" "$admin_password" "访问地址: http://${server_ip}:25774"
+
+    print_success "Komari 安装成功！"
+    echo ""
+    print_info "访问地址: http://${server_ip}:25774"
+    print_info "用户名: admin"
+    print_info "密码: $admin_password"
+    echo ""
+    print_warning "请登录后立即修改默认密码"
+
+    return 0
 }
-# ============================================
+
 # 卸载函数
-# ============================================
 uninstall() {
-    print_warning "卸载 Komari 探针"
-    read -p "确认卸载？(y/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        systemctl stop komari 2>/dev/null
-        systemctl disable komari 2>/dev/null
-        rm -f /etc/systemd/system/komari.service
-        rm -f /usr/local/bin/komari
-        systemctl daemon-reload
-        print_success "Komari 已卸载"
-        write_log "$LOG_LEVEL_INFO" "Komari 已卸载"
+    print_step "卸载 Komari"
+
+    local KOMARI_DIR="/opt/komari"
+    if [ -d "$KOMARI_DIR" ]; then
+        cd "$KOMARI_DIR" || return 1
+        docker compose down -v
+        cd .. && rm -rf "$KOMARI_DIR"
+        print_success "Komari 及其数据已卸载。"
+    else
+        print_warning "未找到 Komari 安装目录，可能已被卸载。"
     fi
 }
